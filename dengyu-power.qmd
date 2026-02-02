@@ -1,0 +1,136 @@
+---
+title: "Dengyu Power Analysis"
+format: html
+---
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false 
+
+library(tidyverse)
+library(pwr)
+```
+
+## Why
+
+A power analysis helps us better understand the minimum sample size requirement to detect something that is both *statistically significant* and meaningful to the researcher.
+
+## The scenario
+
+We are going to approach this power analysis by simulating the "bare minimum" detection that would be meaningful to the researcher. The following plot illustrates an example of what a bare minimum meaningful difference would look like.
+
+```{r}
+#| echo: false
+#| warning: false
+
+# 1. Create the dataset
+set.seed(42)
+angle_levels <- c("70", "90", "180")
+turn_levels <- c("2", "3", "4")
+n <- 20 
+
+data <- expand.grid(
+  Angle = factor(angle_levels, levels = angle_levels), 
+  Turn = factor(turn_levels, levels = turn_levels), 
+  replicate = 1:n
+)
+
+# 2. Logic:
+# Turns 2 & 3: Mean 50 across all angles
+# Turn 4: Mean 50 for 70 & 90 degrees, jumps to 100 at 180 degrees
+data <- data %>%
+  mutate(value = case_when(
+    Turn == "4" & Angle == "180" ~ rnorm(n(), 100, 5),
+    TRUE                         ~ rnorm(n(), 50, 5)
+  ))
+
+# 3. Create the plot
+ggplot(data, aes(x = Angle, y = value, color = Turn, group = Turn)) +
+  geom_jitter(alpha = 0.2, width = 0.15) +
+  stat_summary(fun = mean, geom = "line", size = 1.2) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  theme_minimal() +
+  scale_color_manual(values = c("2" = "#E41A1C",   
+                                "3" = "#377EB8",   
+                                "4" = "#4DAF4A")) + 
+  labs(
+    title = "2-Way ANOVA: Impact of Angle and Turn",
+    subtitle = "Turns 2 & 3 stay at baseline; Turn 4 shows a spike at 180°",
+    x = "Angle (Degrees)",
+    y = expression(phi),  # Changed from "Measured Value" to the symbol Phi
+    color = "Turn Level"
+  )
+```
+
+## The data & model
+
+| Turns | Angle |
+|-------|-------|
+| 2     | 70    |
+| 3     | 90    |
+| 4     | 180   |
+
+$$y_{ijk} = \mu + \alpha_i + \beta_j + (\alpha\beta)_{ij} + \epsilon_{ijk}$$
+
+$y_{ijk}$ will be the impedence / $\phi$ for the ith observation of the jth turn and the kth angle.
+
+For this power analysis, we are going to assume $\phi$ to be the response.
+
+## Power Analysis
+
+Because we are only looking for that single contrast, we can do the power analysis using one-way anova with 9 groups. 
+
+$$y_{ij} = \mu + \tau_i + \epsilon_{ij}$$
+
+$y_{ij}$ is the $\phi$ for ith Angle/Turn combination. 
+
+We need to make certain assumptions before conducting the power analysis:
+
+#### Estimating $\mu$ and $\sigma^{2}$
+
+We need to estimate $\mu$ (mean of $\phi$) for each combination of Angle and Turn, based on the investigation of what $n$ should we collect to detect a the bare minimum meaningful difference. 
+
+Make the estimates of the means resonable based on baseline data. **The estimate of the meaningful difference** needs to be justified by the researcher. 
+
+In the creation of the `means` object, the baseline 8 means are created in by the `rep()` function. The default is set to 50. Change this to something meaningful. The value after the `,` represents **the meaningful difference you hope to detect**. The default is set to 65. This means that we are conducting a power analysis to detect a group change of 15 units. Change this to something meaningful. 
+
+The variance $\sigma^2$ can be estimated using our baseline data. Take the $\sqrt{\sigma^2}$ to estimate the group standard deviation (expected noise / within group variability). Right now, the default is set to 10. Change this to something meaningful. 
+
+```{r}
+calculate_f <- function(means, common_sd) {
+  grand_mean <- mean(means)
+  sd_between <- sqrt(mean((means - grand_mean)^2))
+  return(sd_between / common_sd)
+}
+
+means <- c(rep(50, 8), 65) # 8 groups at 50, one at 65
+group_sd <- 15             # Expected noise/standard deviation
+f_size <- calculate_f(means, group_sd) # Effect size
+```
+
+
+```{r}
+pwr_result <- pwr.anova.test(k = 9, 
+                             f = f_size, 
+                             sig.level = 0.05, 
+                             power = 0.8) # Solving for n
+
+print(pwr_result)
+```
+
+
+## Considerations with power
+
+-- This analysis assumed a *balanced design*, which means we have an equal $n$ across each group. An unbalanced design decreases power. 
+
+-- Should account for batch to batch variability (this will increase power).
+
+-- Using the overall $\sigma^2$ is a conservative estimate. Power will likely be higher than reported.
+
+## Model considerations 
+
+-- Should account for batch to batch variability (random effect on batch)
+
+-- Take multiple measurements from the same coil and estimate the multiple measurements variability. If this is meaningful, we should account for it. If it's not meaningful to the researcher, we can ignore this.
+
